@@ -1,16 +1,12 @@
 import json
 from pathlib import Path
 
-# Root dataset folder
 dataset_root = Path("./dataset/flattened_dataset")
-
-# Iterate through all subfolders
 for subfolder in dataset_root.iterdir():
 
     if not subfolder.is_dir():
         continue
 
-    # Find JSON metadata files
     json_files = list(subfolder.glob("*.json"))
 
     if len(json_files) == 0:
@@ -31,9 +27,6 @@ for subfolder in dataset_root.iterdir():
 
             anchors = []
 
-            # -------------------------------------------------
-            # obj2 anchor (ONLY if obj2 exists)
-            # -------------------------------------------------
             obj2_entity = metadata.get("entities", {}).get("obj2")
 
             obj2_pose = opencv_data.get("obj2_final_pose")
@@ -49,9 +42,6 @@ for subfolder in dataset_root.iterdir():
                     "delta":opencv_data.get("relative_translation")["observed_partial_pcd"]["obj1_to_obj2"],
                 })
 
-            # -------------------------------------------------
-            # receptacle anchor (always added)
-            # -------------------------------------------------
             receptacle_pose = opencv_data.get("receptacle_final_pose")
 
             if receptacle_pose is not None:
@@ -65,14 +55,8 @@ for subfolder in dataset_root.iterdir():
                     "delta":opencv_data.get("relative_translation")["observed_partial_pcd"]["obj1_to_receptacle"],
                 })
 
-            # -------------------------------------------------
-            # Save anchors into metadata
-            # -------------------------------------------------
             metadata["anchors"] = anchors
 
-            # -------------------------------------------------
-            # Write updated metadata back
-            # -------------------------------------------------
             with open(json_path, "w") as f:
                 json.dump(metadata, f, indent=4)
 

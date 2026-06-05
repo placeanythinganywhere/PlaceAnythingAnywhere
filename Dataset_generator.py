@@ -20,9 +20,7 @@ from omnigibson.object_states.kinematics_mixin import KinematicsMixin
 from omnigibson.object_states.on_top import OnTop
 from omnigibson.utils.object_state_utils import sample_kinematics
 
-# =========================================================================
-# 1. TO THE LEFT
-# =========================================================================
+
 class ToTheLeft(KinematicsMixin, RelativeObjectState, BooleanStateMixin):
     @classmethod
     def get_dependencies(cls):
@@ -106,9 +104,6 @@ class ToTheLeft(KinematicsMixin, RelativeObjectState, BooleanStateMixin):
         
         return dot_L > 0.0 and dot_L <= 0.5 and abs(dot_F) < (dot_L * math.tan(math.radians(30)))
 
-# =========================================================================
-# 2. TO THE RIGHT
-# =========================================================================
 class ToTheRight(KinematicsMixin, RelativeObjectState, BooleanStateMixin):
     @classmethod
     def get_dependencies(cls):
@@ -190,9 +185,7 @@ class ToTheRight(KinematicsMixin, RelativeObjectState, BooleanStateMixin):
         
         return dot_R > 0.0 and dot_R <= 0.5 and abs(dot_F) < (dot_R * math.tan(math.radians(30)))
 
-# =========================================================================
-# 3. IN FRONT OF
-# =========================================================================
+
 class InFrontOf(KinematicsMixin, RelativeObjectState, BooleanStateMixin):
     @classmethod
     def get_dependencies(cls):
@@ -275,9 +268,7 @@ class InFrontOf(KinematicsMixin, RelativeObjectState, BooleanStateMixin):
         
         return dot_F > 0.0 and dot_F <= 0.5 and abs(dot_R) < (dot_F * math.tan(math.radians(30)))
 
-# =========================================================================
-# 4. BEHIND
-# =========================================================================
+
 class Behind(KinematicsMixin, RelativeObjectState, BooleanStateMixin):
     @classmethod
     def get_dependencies(cls):
@@ -361,9 +352,7 @@ class Behind(KinematicsMixin, RelativeObjectState, BooleanStateMixin):
         return dot_B > 0.0 and dot_B <= 0.5 and abs(dot_R) < (dot_B * math.tan(math.radians(30)))
 
 
-# ============================================================
-# LIGHTWEIGHT SIMULATOR CONFIG (VRAM FRIENDLY)
-# ============================================================
+
 gm.ENABLE_OBJECT_STATES = True
 gm.USE_GPU_DYNAMICS = False     
 gm.ENABLE_HQ_RENDERING = False   
@@ -382,12 +371,10 @@ random.shuffle(MOVABLE_CATEGORIES)
 with open("assets/rs_int_cam_poses.json", "r") as f:
     pose_data = json.load(f)
 
-# POSE_DICT = {item["id"]: item["poses"] for item in pose_data}
-
 REC_DATA_DICT = {
     item["id"]: {
         "poses": item["poses"],
-        "relations": item.get("relations", ["ontop"]) # Fallback to ontop if missing
+        "relations": item.get("relations", ["ontop"]) 
     } 
     for item in pose_data
 }
@@ -397,9 +384,7 @@ REC_INIT_NAME = "breakfast_table_skczfi_0"
 FLIP_CV_GL = np.array([[1, 0, 0], [0, -1, 0], [0, 0, -1]])
 
 
-# ============================================================
-# UTILS
-# ============================================================
+
 def to_numpy(data):
     if th.is_tensor(data): return data.detach().cpu().numpy()
     return np.array(data)
@@ -448,7 +433,6 @@ def save_data_node(iter_dir, prefix, obs, masks_dict, cam, save_pcd=False):
     # sem = to_numpy(obs["seg_semantic"])
     # cv2.imwrite(os.path.join(target_dir, "seg_semantic.png"), cv2.applyColorMap((sem % 256).astype(np.uint8), cv2.COLORMAP_JET))
 
-    # --- IN-MEMORY GEOMETRY UNPROJECTION ---
     K = to_numpy(cam.intrinsic_matrix)
     fx, fy, cx, cy = K[0, 0], K[1, 1], K[0, 2], K[1, 2]
     H, W = depth.shape
@@ -457,7 +441,6 @@ def save_data_node(iter_dir, prefix, obs, masks_dict, cam, save_pcd=False):
     valid_mask = (depth > float(to_numpy(cam.clipping_range[0]))) & (depth < float(to_numpy(cam.clipping_range[1])))
     centroids = {}
 
-    # Save physical scene Point Cloud ONLY if explicitly requested
     if save_pcd and np.any(valid_mask):
         rgb_uint8 = (rgb * 255).astype(np.uint8) if rgb.max() <= 1.0 else rgb.astype(np.uint8)
         z_val = depth[valid_mask]
@@ -470,7 +453,6 @@ def save_data_node(iter_dir, prefix, obs, masks_dict, cam, save_pcd=False):
             f.write(f"# .PCD v0.7\nVERSION 0.7\nFIELDS x y z rgb\nSIZE 4 4 4 4\nTYPE F F F F\nCOUNT 1 1 1 1\nWIDTH {len(points)}\nHEIGHT 1\nVIEWPOINT 0 0 0 1 0 0 0\nPOINTS {len(points)}\nDATA ascii\n")
             np.savetxt(f, np.column_stack((points, rgb_float)), fmt="%.6f %.6f %.6f %g")
 
-    # Fast in-memory centroid calculation (0 disk I/O)
     for name, m_bool in masks_dict.items():
         if m_bool is not None and np.any(m_bool):
             cv2.imwrite(os.path.join(target_dir, f"mask_{name}.png"), (m_bool * 255).astype(np.uint8))
@@ -530,9 +512,6 @@ def get_global_iteration(path):
             except: pass
     return max_iter + 1
 
-# ============================================================
-# MAIN ENGINE
-# ============================================================
 
 def main():
     cfg = {"scene": {"type": "InteractiveTraversableScene", "scene_model": "Rs_int"}}
@@ -558,12 +537,10 @@ def main():
             
     global_iteration = get_global_iteration(DATASET_PATH)
 
-    # 1. SEQUENTIAL OBJECT LOOP (Obj0 & Obj1, Obj1 & Obj2, etc.)
     for obj_idx in range(len(all_movable_models) - 1):
         obj1_cat, obj1_model = all_movable_models[obj_idx]
         obj2_cat, obj2_model = all_movable_models[obj_idx + 1]
 
-        # Add to scene
         obj1 = DatasetObject(name=f"obj1_{obj_idx}", category=obj1_cat, model=obj1_model)
         obj2 = DatasetObject(name=f"obj2_{obj_idx}", category=obj2_cat, model=obj2_model)
         
@@ -577,9 +554,6 @@ def main():
         obj1.keep_still(); obj2.keep_still()
         for _ in range(5): og.sim.step() 
 
-        # ==========================================
-        # STAGE 1: INITIAL SCENE (Obj1 on Breakfast Table)
-        # ==========================================
         if not obj1.states[object_states.OnTop].set_value(rec_init, True):
             og.sim.stop(); scene.remove_object(obj1); scene.remove_object(obj2); og.sim.play(); continue
             
@@ -611,9 +585,6 @@ def main():
         cv_obj1_init = get_cv_pose(obj1, c_pos_init, c_quat_init)
         cv_rec_init = get_cv_pose(rec_init, c_pos_init, c_quat_init)
 
-        # ==========================================
-        # 2. RECEPTACLE LOOP
-        # ==========================================
         # for rec_final_name, poses in POSE_DICT.items():
         #     if rec_final_name == REC_INIT_NAME: continue 
         #     rec_final = next((obj for obj in scene.objects if obj.name == rec_final_name), None)
@@ -623,9 +594,7 @@ def main():
             rec_final = next((obj for obj in scene.objects if obj.name == rec_final_name), None)
             if not rec_final: continue
             supported_relations = rec_data["relations"]
-            # ==========================================
-            # 3. CAMERA ANGLE LOOP
-            # ==========================================
+
             # for cam_pose in poses:
             #     c_pos_final = np.array(cam_pose["translation"])
             #     c_quat_final = np.array(cam_pose["rotation"])
@@ -633,11 +602,9 @@ def main():
                 c_pos_final = np.array(cam_pose["translation"])
                 c_quat_final = np.array(cam_pose["rotation"])
                 
-                setup_succeeded = False # Track if ANY relation succeeds for this camera angle
+                setup_succeeded = False 
 
-                # ==========================================
-                # 4. RELATION LOOP
-                # ==========================================
+
                 for relation in supported_relations:
                     print(f"\n--- {relation.upper()} | Automated Gen Step: {global_iteration} ---")
                     ins = f"Place the {obj1_cat.replace('_',' ')} " + \
@@ -645,7 +612,6 @@ def main():
                            f"to the {relation} of the {obj2_cat.replace('_',' ')} on the {rec_final.category.replace('_',' ')}.")
                     print(f">>>> [INSTRUCTION]: {ins} <<<<")
 
-                    # Reset Table
                     obj1.set_position_orientation(position=th.tensor([100.0, 100.0, -50.0]))
                     obj2.set_position_orientation(position=th.tensor([100.0, 100.0, -55.0]))
                     obj1.enable_gravity()
@@ -680,14 +646,13 @@ def main():
                         print(f"    [!] Failed to satisfy {relation}. Skipping...")
                         continue 
 
-                    # Apply Camera-Relative Orientation Snap
                     r_obj_final_target = R.from_quat(c_quat_final) * r_relative_lock
                     obj1.set_position_orientation(
                         position=obj1.get_position_orientation()[0], 
                         orientation=r_obj_final_target.as_quat()
                     )
                     obj1.keep_still()
-                    obj1.disable_gravity()  # Stop it from falling
+                    obj1.disable_gravity()  
                     if obj2:
                         obj2.keep_still()
                         obj2.disable_gravity()
@@ -701,22 +666,17 @@ def main():
                         print("    [!] Object occluded or out of view after placement. Skipping...")
                         continue
 
-                    # ==========================================
-                    # DATA EXTRACTION & SAVING
-                    # ==========================================
+
                     iter_path = os.path.join(DATASET_PATH, f"{relation}_iter_{global_iteration}")
                     os.makedirs(iter_path, exist_ok=True)
 
-                    # Save Stage 1 (Initial) - NO PCD SAVED
                     centroids_init = save_data_node(iter_path, "initial_object_img", obs_init, masks_init, cam, save_pcd=False)
                     obj1_init_partial_centroid = centroids_init.get("obj1")
 
-                    # Save Stage 2 (Placed) - NO PCD SAVED
                     centroids_final = save_data_node(iter_path, "final_object", obs_final_obj, masks_final_obj, cam, save_pcd=False)
                     obj1_final_partial_centroid = centroids_final.get("obj1")
                     cv_obj1_final = get_cv_pose(obj1, c_pos_final, c_quat_final)
 
-                    # Save Stage 3 (Empty Scene) - PCD SAVED
                     obj1.set_position_orientation(position=th.tensor([100.0, 100.0, -50.0]))
                     obj1.keep_still()
                     for _ in range(10): og.sim.step() 
@@ -735,7 +695,6 @@ def main():
                     cv_obj2_final = get_cv_pose(obj2, c_pos_final, c_quat_final)
                     cv_rec_final = get_cv_pose(rec_final, c_pos_final, c_quat_final)
 
-                    # Metadata Math
                     R_delta_mat = cv_obj1_final["_R_mat"] @ np.linalg.inv(cv_obj1_init["_R_mat"])
                     T_delta = cv_obj1_final["_pos_cv"] - (R_delta_mat @ cv_obj1_init["_pos_cv"])
                     r_delta = R.from_matrix(R_delta_mat)
@@ -803,11 +762,9 @@ def main():
                     print(f"✅ Generated {iter_path} successfully!")
                     setup_succeeded = True
                     
-                # Iterate the counter only after completing all relations for a specific camera angle
                 if setup_succeeded:
                     global_iteration += 1
 
-        # End of Receptacle Iterations: Clean up this specific pair
         og.sim.stop()
         scene.remove_object(obj1)
         scene.remove_object(obj2)
