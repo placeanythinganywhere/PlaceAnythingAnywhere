@@ -1,25 +1,3 @@
-"""
-dataloader.py
-=============
-Dataset and DataLoader for the Language-Conditioned Scene Transformation model.
-
-Inputs (per sample):
-    - scene_rgbd  : (H, W, 4)  float32 — full scene RGBD image
-    - object_rgbd : (H, W, 4)  float32 — isolated object RGBD image
-    - text_prompt : str         — free-form instruction (e.g. "place the mug on the shelf")
-
-Outputs (per sample):
-    - target_pointcloud  : (N, 3+C)  float32 — full modified scene point cloud (xyz + optional rgb/normals)
-    - object_placements  : list[dict]        — per-object placement metadata
-        {
-            "object_id"   : int,
-            "translation" : (3,)   float32,   # Δ or absolute position
-            "rotation"    : (4,)   float32,   # quaternion (w, x, y, z)
-            "scale"       : (3,)   float32,   # per-axis scale factor
-            "exists"      : bool,             # False → object was removed
-        }
-"""
-
 from __future__ import annotations
 
 import json
@@ -33,20 +11,13 @@ from torch.utils.data import DataLoader, Dataset
 from torchvision import transforms as T
 
 
-# ---------------------------------------------------------------------------
-# Constants / defaults
-# ---------------------------------------------------------------------------
-
-DEFAULT_IMG_SIZE: tuple[int, int] = (480, 640)   # (H, W)
-DEFAULT_PC_POINTS: int = 8192                     # number of points in target cloud
+DEFAULT_IMG_SIZE: tuple[int, int] = (480, 640)   
+DEFAULT_PC_POINTS: int = 8192                     
 
 
-# ---------------------------------------------------------------------------
-# Per-sample point-cloud helpers
-# ---------------------------------------------------------------------------
+
 
 def farthest_point_sample(pts: np.ndarray, n_samples: int) -> np.ndarray:
-    """Deterministic FPS to produce exactly n_samples points from pts (N, C)."""
     N, _ = pts.shape
     if N <= n_samples:
         idx = np.concatenate([
@@ -55,13 +26,8 @@ def farthest_point_sample(pts: np.ndarray, n_samples: int) -> np.ndarray:
         ])
         return pts[idx]
 
-    # --- FAST PATH ---
-    # FPS on 200,000 points takes ~17 seconds per sample in pure Python/NumPy.
-    # By uniformly downsampling to 20k points first, we drop the time to < 0.1s
-    # while preserving the exact same bounding volume and spatial distribution.
     MAX_PTS_FOR_FPS = 20000
     if N > MAX_PTS_FOR_FPS:
-        # Uniformly random subsample first
         sub_idx = np.random.choice(N, MAX_PTS_FOR_FPS, replace=False)
         pts = pts[sub_idx]
         N = MAX_PTS_FOR_FPS
@@ -80,44 +46,24 @@ def farthest_point_sample(pts: np.ndarray, n_samples: int) -> np.ndarray:
     return pts[sampled_idx]
 
 
-# ---------------------------------------------------------------------------
-# Core Dataset
-# ---------------------------------------------------------------------------
 
 class SceneTransformDataset(Dataset):
-    """
-    Dataset for language-conditioned 3D scene editing.
-
-    Expected directory layout
-    -------------------------
-    root/
-      metadata.json              ← list of sample dicts (see _load_metadata)
-      samples/
-        <sample_id>/
-          scene_rgb.png
-          scene_depth.npy        ← float32 (H, W) in metres
-          object_rgb.png
-          object_depth.npy
-          target_cloud.npy       ← float32 (N, 3) or (N, 6)
-          placements.json        ← list of per-object placement dicts
-          intrinsics.json        ← {"fx":…, "fy":…, "cx":…, "cy":…}
-    """
 
     def __init__(
         self,
         root: str | Path,
-        split: str = "train",                    # "train" | "val" | "test"
+        split: str = "train",                    
         img_size: tuple[int, int] = DEFAULT_IMG_SIZE,
         n_pc_points: int = DEFAULT_PC_POINTS,
         augment: bool = True,
         depth_scale: float = 1.0,
         max_depth: float = 10.0,
-        max_text_len: int = 77,                  # T5-style token limit
+        max_text_len: int = 77,                  
     ) -> None:
         super().__init__()
         self.root = Path(root)
         self.split = split
-        self.img_size = img_size            # (H, W)
+        self.img_size = img_size            
         self.n_pc_points = n_pc_points
         self.augment = augment
         self.depth_scale = depth_scale
@@ -126,33 +72,14 @@ class SceneTransformDataset(Dataset):
 
         self.samples: list[dict[str, Any]] = self._load_metadata()
 
-        # Image pre-processing (RGB channels only — depth handled separately)
         self.img_transform = T.Compose([
-            T.ToTensor(),                         # (3, H, W) in [0, 1]
+            T.ToTensor(),                        
             T.Resize(img_size, antialias=True),
             T.Normalize(mean=[0.485, 0.456, 0.406],
                         std=[0.229, 0.224, 0.225]),
         ])
 
-    # ------------------------------------------------------------------
-    # Metadata loading
-    # ------------------------------------------------------------------
-
     def _load_metadata(self) -> list[dict[str, Any]]:
-        """
-        Load sample metadata for the requested split from metadata.json.
-
-        Expected JSON structure
-        -----------------------
-        [
-          {
-            "sample_id"   : "0001",
-            "split"       : "train",
-            "text_prompt" : "move the red mug onto the shelf",
-          },
-          ...
-        ]
-        """
         meta_path = self.root / "metadata.json"
         if not meta_path.exists():
             raise FileNotFoundError(f"metadata.json not found at {meta_path}")
@@ -165,24 +92,19 @@ class SceneTransformDataset(Dataset):
             raise ValueError(f"No samples found for split='{self.split}'")
         return split_samples
 
-    # ------------------------------------------------------------------
-    # Low-level I/O helpers
-    # ------------------------------------------------------------------
+
 
     def _sample_dir(self, sample_id: str) -> Path:
         return self.root / "samples" / sample_id
 
     def _load_rgb(self, path: Path) -> np.ndarray:
-        """Load an RGB image as (H, W, 3) uint8."""
         from PIL import Image
         img = Image.open(path).convert("RGB")
-        img = img.resize((self.img_size[1], self.img_size[0]))  # PIL: (W, H)
+        img = img.resize((self.img_size[1], self.img_size[0])) 
         return np.array(img, dtype=np.uint8)
 
     def _load_depth(self, path: Path) -> np.ndarray:
-        """Load a depth map as (H, W) float32 in metres."""
         depth = np.load(path).astype(np.float32)
-        # Resize to img_size if necessary
         if depth.shape != self.img_size:
             from PIL import Image
             depth_img = Image.fromarray(depth)
@@ -193,7 +115,6 @@ class SceneTransformDataset(Dataset):
         return depth
 
     def _load_intrinsics(self, path: Path) -> np.ndarray:
-        """Return a 3×3 intrinsics matrix from a JSON dict."""
         with open(path) as f:
             d = json.load(f)
         K = np.array([
@@ -207,16 +128,12 @@ class SceneTransformDataset(Dataset):
         with open(path) as f:
             return json.load(f)
 
-    # ------------------------------------------------------------------
-    # Augmentation helpers
-    # ------------------------------------------------------------------
 
     def _augment_rgbd(
         self,
-        rgb: np.ndarray,   # (H, W, 3) uint8
-        depth: np.ndarray, # (H, W) float32
+        rgb: np.ndarray,   
+        depth: np.ndarray,
     ) -> tuple[np.ndarray, np.ndarray]:
-        """Lightweight RGBD augmentation (flip, colour jitter)."""
         if self.augment and np.random.rand() < 0.5:
             rgb   = np.fliplr(rgb).copy()
             depth = np.fliplr(depth).copy()
@@ -228,14 +145,11 @@ class SceneTransformDataset(Dataset):
         return rgb, depth
 
     def _augment_pointcloud(self, pts: np.ndarray) -> np.ndarray:
-        """Random jitter + rotation around vertical axis for point clouds."""
         if not self.augment:
             return pts
 
-        # Small jitter
         pts[:, :3] += np.random.normal(0, 0.002, (len(pts), 3)).astype(np.float32)
 
-        # Random rotation around Y axis
         theta = np.random.uniform(0, 2 * np.pi)
         c, s  = np.cos(theta), np.sin(theta)
         R = np.array([[c, 0, s], [0, 1, 0], [-s, 0, c]], dtype=np.float32)
@@ -243,16 +157,11 @@ class SceneTransformDataset(Dataset):
 
         return pts
 
-    # ------------------------------------------------------------------
-    # __getitem__
-    # ------------------------------------------------------------------
-
     def __getitem__(self, idx: int) -> dict[str, Any]:
         meta = self.samples[idx]
         sid  = meta["sample_id"]
         sdir = self._sample_dir(sid)
 
-        # ---- 1. Load RGBD images ----------------------------------------
         scene_rgb   = self._load_rgb(sdir / "scene_rgb.png")
         scene_depth = self._load_depth(sdir / "scene_depth.npy")
         obj_rgb     = self._load_rgb(sdir / "object_rgb.png")
@@ -261,52 +170,41 @@ class SceneTransformDataset(Dataset):
         scene_rgb, scene_depth = self._augment_rgbd(scene_rgb, scene_depth)
         obj_rgb,   obj_depth   = self._augment_rgbd(obj_rgb,   obj_depth)
 
-        # ---- 2. Build RGBD tensors (4-channel: RGB + D) -----------------
-        #  shape: (4, H, W)
-        scene_rgb_t  = self.img_transform(scene_rgb)              # (3, H, W)
-        scene_depth_t = torch.from_numpy(scene_depth).unsqueeze(0) # (1, H, W)
-        scene_rgbd    = torch.cat([scene_rgb_t, scene_depth_t], dim=0)  # (4, H, W)
+
+        scene_rgb_t  = self.img_transform(scene_rgb)             
+        scene_depth_t = torch.from_numpy(scene_depth).unsqueeze(0) 
+        scene_rgbd    = torch.cat([scene_rgb_t, scene_depth_t], dim=0)  
 
         obj_rgb_t    = self.img_transform(obj_rgb)
         obj_depth_t  = torch.from_numpy(obj_depth).unsqueeze(0)
-        object_rgbd  = torch.cat([obj_rgb_t, obj_depth_t], dim=0)       # (4, H, W)
+        object_rgbd  = torch.cat([obj_rgb_t, obj_depth_t], dim=0)       
 
-        # ---- 3. Text prompt --------------------------------------------
-        text_prompt: str = meta["text_prompt"]   # raw string; tokenization
-        #   happens inside the model's text encoder (T5 tokenizer)
+        text_prompt: str = meta["text_prompt"]   
 
-        # ---- 4. Target point cloud -------------------------------------
         target_cloud_raw = np.load(sdir / "target_cloud.npy").astype(np.float32)
         target_cloud_raw = self._augment_pointcloud(target_cloud_raw)
         target_cloud     = farthest_point_sample(target_cloud_raw, self.n_pc_points)
-        target_cloud_t   = torch.from_numpy(target_cloud)  # (N, 3+C)
+        target_cloud_t   = torch.from_numpy(target_cloud)  
 
-        # ---- 5. Object placement metadata ------------------------------
         placements: list[dict] = self._load_placements(sdir / "placements.json")
-        #   Each dict has keys: object_id, translation (3,), rotation (4,),
-        #                       scale (3,), exists (bool)
-        # Collate-friendly tensors
+
         n_obj      = len(placements)
         obj_ids    = torch.tensor([p["object_id"]   for p in placements], dtype=torch.long)
-        trans      = torch.tensor([p["translation"] for p in placements], dtype=torch.float32)  # (M, 3)
-        rot        = torch.tensor([p["rotation"]    for p in placements], dtype=torch.float32)  # (M, 4)
-        scale      = torch.tensor([p["scale"]       for p in placements], dtype=torch.float32)  # (M, 3)
-        exists     = torch.tensor([p["exists"]      for p in placements], dtype=torch.bool)     # (M,)
+        trans      = torch.tensor([p["translation"] for p in placements], dtype=torch.float32)  
+        rot        = torch.tensor([p["rotation"]    for p in placements], dtype=torch.float32)  
+        scale      = torch.tensor([p["scale"]       for p in placements], dtype=torch.float32)  
+        exists     = torch.tensor([p["exists"]      for p in placements], dtype=torch.bool)     
 
         return {
-            # -- Inputs --
-            "scene_rgbd"   : scene_rgbd,    # (4, H, W)
-            "object_rgbd"  : object_rgbd,   # (4, H, W)
-            "text_prompt"  : text_prompt,   # str — collated as list[str]
-            # -- Targets --
-            "target_cloud" : target_cloud_t,# (N, 3+C)
-            # -- Placement labels --
-            "obj_ids"      : obj_ids,       # (M,)
-            "translation"  : trans,         # (M, 3)
-            "rotation"     : rot,           # (M, 4)
-            "scale"        : scale,         # (M, 3)
-            "exists"        : exists,       # (M,)
-            # -- Meta --
+            "scene_rgbd"   : scene_rgbd,    
+            "object_rgbd"  : object_rgbd,   
+            "text_prompt"  : text_prompt,   
+            "target_cloud" : target_cloud_t,
+            "obj_ids"      : obj_ids,       
+            "translation"  : trans,         
+            "rotation"     : rot,           
+            "scale"        : scale,         
+            "exists"        : exists,      
             "sample_id"    : sid,
         }
 
@@ -314,34 +212,21 @@ class SceneTransformDataset(Dataset):
         return len(self.samples)
 
 
-# ---------------------------------------------------------------------------
-# Collate function
-# ---------------------------------------------------------------------------
-
 def collate_fn(batch: list[dict]) -> dict[str, Any]:
-    """
-    Custom collate for variable-length placement lists.
-
-    Pad object placements to the maximum number of objects in the batch,
-    and create a boolean padding mask.
-    """
     from torch.utils.data._utils.collate import default_collate
 
-    # Fields with uniform shape — use default collation
     uniform_keys = ["scene_rgbd", "object_rgbd", "target_cloud"]
     collated: dict[str, Any] = {k: default_collate([s[k] for s in batch]) for k in uniform_keys}
 
-    # Text prompts — list of strings
     collated["text_prompt"] = [s["text_prompt"] for s in batch]
     collated["sample_id"]   = [s["sample_id"]   for s in batch]
 
-    # Variable-length placement fields — pad to max_objs
     max_objs = max(len(s["obj_ids"]) for s in batch)
     B = len(batch)
 
     def _pad(key: str, fill: float | int = 0) -> torch.Tensor:
-        parts = [s[key] for s in batch]           # list of (M_i, ...) tensors
-        feature_shape = parts[0].shape[1:]        # e.g. () or (3,) or (4,)
+        parts = [s[key] for s in batch]           
+        feature_shape = parts[0].shape[1:]        
         out = torch.full((B, max_objs) + feature_shape, fill,
                          dtype=parts[0].dtype)
         for i, p in enumerate(parts):
@@ -354,18 +239,13 @@ def collate_fn(batch: list[dict]) -> dict[str, Any]:
     collated["scale"]        = _pad("scale",       fill=1.0)
     collated["exists"]       = _pad("exists",      fill=0)
 
-    # Padding mask: True = valid object, False = padding
     obj_padding_mask = torch.zeros(B, max_objs, dtype=torch.bool)
     for i, s in enumerate(batch):
         obj_padding_mask[i, :len(s["obj_ids"])] = True
-    collated["obj_padding_mask"] = obj_padding_mask  # (B, max_objs)
+    collated["obj_padding_mask"] = obj_padding_mask  
 
     return collated
 
-
-# ---------------------------------------------------------------------------
-# Factory helpers
-# ---------------------------------------------------------------------------
 
 def build_dataloader(
     root: str | Path,
@@ -374,12 +254,11 @@ def build_dataloader(
     num_workers: int = 4,
     n_pc_points: int = DEFAULT_PC_POINTS,
     img_size: tuple[int, int] = DEFAULT_IMG_SIZE,
-    augment: bool | None = None,         # None → auto (True for train)
+    augment: bool | None = None,         
     depth_scale: float = 1.0,
     max_depth: float = 10.0,
     pin_memory: bool = True,
 ) -> DataLoader:
-    """Convenience factory that returns a ready-to-use DataLoader."""
     if augment is None:
         augment = split == "train"
 
@@ -404,10 +283,6 @@ def build_dataloader(
     )
 
 
-# ---------------------------------------------------------------------------
-# Quick smoke-test
-# ---------------------------------------------------------------------------
-
 if __name__ == "__main__":
     import tempfile, shutil
 
@@ -418,11 +293,6 @@ if __name__ == "__main__":
     print("  print(batch['scene_rgbd'].shape)    # (B, 4, H, W)")
     print("  print(batch['target_cloud'].shape)  # (B, N, 3+C)")
     print("  print(batch['text_prompt'])         # list[str]")
-
-
-# ---------------------------------------------------------------------------
-# iter_* scene dataset  (data/iter_*/)
-# ---------------------------------------------------------------------------
 
 
 def _load_ascii_pcd(path: Path) -> np.ndarray:
@@ -450,24 +320,6 @@ def _load_ascii_pcd(path: Path) -> np.ndarray:
 
 
 class IterSceneDataset(Dataset):
-    """Dataset for one sample per ``data/iter_*`` folder.
-
-    Returned fields
-    ---------------
-    initial_object_rgbd : (4, H, W) float32
-        RGBD for the initial object view.
-    final_empty_rgbd : (4, H, W) float32
-        RGBD for the final empty scene.
-    final_oriented_rgbd : (4, H, W) float32
-        RGBD for the final oriented scene.
-    object_mask : (H, W) bool
-        Binary object mask from ``initial_object/object_mask.png``.
-    final_oriented_pointcloud : (N, 6) float32
-        XYZRGB point cloud loaded from ``final_oriented/point_cloud.pcd``.
-    metadata : dict
-        Contents of ``metadata.json`` for the iteration.
-    """
-
     def __init__(
         self,
         root: str | Path,
@@ -489,9 +341,6 @@ class IterSceneDataset(Dataset):
         self.load_pointclouds = bool(load_pointclouds)
         self.inference = inference
         self.precompute = precompute
-        # When True, load ground-truth segmentation masks from the dataset so the
-        # model can skip Grounding DINO: mask_obj1 (object/source) and the per-anchor
-        # masks (mask_obj2 / mask_receptacle) from the scene view (final_empty).
         self.load_gt_masks = bool(load_gt_masks)
 
         if not self.root.exists():
@@ -509,8 +358,6 @@ class IterSceneDataset(Dataset):
 
         self.iter_dirs = all_iter_dirs
 
-        # Auto-precompute any samples missing features.pt unless we are already
-        # inside precompute_features.py (precompute=True) which would cause recursion.
         if not self.precompute:
             missing = [p for p in self.iter_dirs if not (p / "features.pt").exists()]
             if missing:
@@ -631,7 +478,6 @@ class IterSceneDataset(Dataset):
         metadata = self._load_metadata(metadata_path)
         text_prompt = metadata.get("instruction", "")
 
-        # --- Compute GT Placement Labels (multi-anchor, up to MAX_ANCHORS=5) ---
         _RELATIONS = ["ontop", "left", "right", "front", "back"]
         _MAX_ANCHORS = 5
 
@@ -640,11 +486,6 @@ class IterSceneDataset(Dataset):
         gt_relation_class = torch.zeros(_MAX_ANCHORS,     dtype=torch.long)
         gt_anchor_valid   = torch.zeros(_MAX_ANCHORS,     dtype=torch.bool)
 
-        # Per-anchor GT masks (slot-aligned with the fields above) so the model can
-        # skip Grounding DINO. The mask file is derived from the anchor_type:
-        #   obj2_anchor       → mask_obj2.png
-        #   receptacle_anchor → mask_receptacle.png
-        # and is read from the scene view (final_empty/).
         H, W = self.img_size
         gt_anchor_masks = (
             torch.zeros(_MAX_ANCHORS, H, W, dtype=torch.bool)
@@ -652,29 +493,36 @@ class IterSceneDataset(Dataset):
         )
 
         anchors_meta = metadata.get("anchors", [])
-        for i, anc in enumerate(anchors_meta[:_MAX_ANCHORS]):
-            delta          = anc.get("delta")
+        slot = 0
+        for anc in anchors_meta:
+            if slot >= _MAX_ANCHORS:
+                break
+            atype    = anc.get("anchor_type", "")
+            relation = anc.get("relation", "ontop")
+            if atype == "obj2_anchor" and relation == "ontop":
+                continue
+
+            delta = anc.get("delta")
             centriod = anc.get("centroid")
-            relation         = anc.get("relation", "ontop")
-            delt = np.array(delta,           dtype=np.float32)
+            delt = np.array(delta, dtype=np.float32)
             cent = np.array(centriod, dtype=np.float32)
-            gt_anchor_pos[i]     = torch.from_numpy(cent)
-            gt_delta_trans[i]    = torch.from_numpy(delt)
-            gt_relation_class[i] = _RELATIONS.index(relation) if relation in _RELATIONS else 0
-            gt_anchor_valid[i]   = True
+            gt_anchor_pos[slot]     = torch.from_numpy(cent)
+            gt_delta_trans[slot]    = torch.from_numpy(delt)
+            gt_relation_class[slot] = _RELATIONS.index(relation) if relation in _RELATIONS else 0
+            gt_anchor_valid[slot]   = True
 
             if self.load_gt_masks:
-                atype = anc.get("anchor_type", "")
                 mask_name = "mask_" + atype.replace("_anchor", "") + ".png"
                 amask_path = final_empty_dir / mask_name
                 if amask_path.exists():
-                    gt_anchor_masks[i] = torch.from_numpy(
+                    gt_anchor_masks[slot] = torch.from_numpy(
                         self._load_mask(amask_path).astype(np.bool_)
                     )
                 else:
                     print(f"[IterSceneDataset] anchor mask not found: {amask_path}")
+
+            slot += 1
         
-        # --- Target point cloud for supervision ---
         if self.load_pointclouds and not (self.inference or self.precompute):
             target_cloud_t = torch.from_numpy(
                     farthest_point_sample(
@@ -685,7 +533,6 @@ class IterSceneDataset(Dataset):
         else:
             target_cloud_t = None
 
-        # --- Camera Intrinsics ---
         intrinsics_dict = metadata.get("camera_intrinsics", {})
         if not intrinsics_dict:
             txt_path = final_empty_dir / "intrinsics.txt"
@@ -703,14 +550,13 @@ class IterSceneDataset(Dataset):
             "final_empty_rgbd": self._build_rgbd_tensor(final_empty_rgb, final_empty_depth),
             "final_oriented_rgbd": self._build_rgbd_tensor(final_oriented_rgb, final_oriented_depth),
             "object_mask": torch.from_numpy(object_mask.astype(np.bool_)),
-            "gt_anchor_masks": gt_anchor_masks,      # (MAX_ANCHORS, H, W) bool or None
+            "gt_anchor_masks": gt_anchor_masks,      
             "target_cloud": target_cloud_t,
-            "gt_anchor_pos":     gt_anchor_pos,      # (MAX_ANCHORS, 3)
-            "gt_delta_trans":    gt_delta_trans,      # (MAX_ANCHORS, 3)
-            "gt_relation_class": gt_relation_class,   # (MAX_ANCHORS,)
-            "gt_anchor_valid":   gt_anchor_valid,     # (MAX_ANCHORS,) bool
+            "gt_anchor_pos":     gt_anchor_pos,      
+            "gt_delta_trans":    gt_delta_trans,      
+            "gt_relation_class": gt_relation_class,   
+            "gt_anchor_valid":   gt_anchor_valid,     
             "camera_intrinsics": camera_intrinsics,
-            # Grounding supervision (not implemented yet): keep as None (no dummy tensors)
             "gt_mask_idx_3c": None,
             "gt_mask_idx_3d": None,
             "metadata": metadata,
@@ -719,7 +565,6 @@ class IterSceneDataset(Dataset):
             "sample_id": iter_dir.name,
         }
         
-        # Load precomputed features if they exist
         feat_path = iter_dir / "features.pt"
         if feat_path.exists():
             out_dict["cached_features"] = torch.load(feat_path, map_location="cpu")
@@ -744,21 +589,6 @@ def build_iter_dataloader(
     precompute: bool = False,
     load_gt_masks: bool = True,
 ) -> DataLoader:
-    """
-    Convenience factory that returns a DataLoader over all ``iter_*``
-    sub-directories found under ``root``.
-
-    Any sample missing a precomputed ``features.pt`` is automatically
-    precomputed before the DataLoader is returned.
-
-    Example
-    -------
-    >>> loader = build_iter_dataloader("data/")
-    >>> batch  = next(iter(loader))
-    >>> print(batch["scene_rgbd"].shape)   # (B, 4, H, W)
-    >>> print(batch["object_rgbd"].shape)  # (B, 4, H, W)
-    >>> print(batch["text_prompt"])        # list[str]
-    """
     dataset = IterSceneDataset(
         root=root,
         img_size=img_size,
@@ -788,7 +618,6 @@ def build_iter_dataloader(
             else:
                 out[k] = default_collate(vals)
 
-        # Grounding supervision not implemented yet — keep as None
         out["gt_mask_idx_3c"] = None
         out["gt_mask_idx_3d"] = None
         out["metadata"] = [s["metadata"] for s in batch]
@@ -796,27 +625,19 @@ def build_iter_dataloader(
         out["scene_dir"]   = [s["scene_dir"]   for s in batch]
         out["sample_id"]   = [s["sample_id"]   for s in batch]
         
-        # Collate cached_features if present
         if all(s["cached_features"] is not None for s in batch):
             cached = {}
-            # seg is a dict of lists
             cached["seg"] = {
                 k: sum([s["cached_features"]["seg"][k] for s in batch], []) 
                 for k in batch[0]["cached_features"]["seg"].keys()
             }
-            # dino is a list of tensors
             cached["scene_dino"] = sum([s["cached_features"]["scene_dino"] for s in batch], [])
-            
-            # text_out is a dict of tensors with shape [1, L, D] or [1, L].
-            # Different prompts tokenize to different L, so pad to the max L in
-            # the batch before concatenating to [B, L, D] / [B, L].
             def _pad_and_cat(tensors: list[torch.Tensor]) -> torch.Tensor:
                 max_len = max(t.shape[1] for t in tensors)
                 padded = []
                 for t in tensors:
                     pad_len = max_len - t.shape[1]
                     if pad_len > 0:
-                        # Pad with zeros along dim 1 (sequence dim)
                         pad_shape = list(t.shape)
                         pad_shape[1] = pad_len
                         t = torch.cat([t, torch.zeros(pad_shape, dtype=t.dtype)], dim=1)

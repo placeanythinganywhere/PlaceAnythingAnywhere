@@ -2,6 +2,7 @@
 from __future__ import annotations
 
 import json
+import math
 import re
 import torch
 import torch.nn as nn
@@ -695,6 +696,8 @@ class T5TextEncoder(nn.Module):
             '{{"source": "the small wooden block", "targets": ["the metal table", "the white shelf"]}}\n\n'
             'Command: Put the purple mug on the black tray.\n'
             '{{"source": "the purple mug", "targets": ["the black tray"]}}\n\n'
+            'Command: Place the green bowl to the left of the white plate on the wooden shelf.\n'
+            '{{"source": "the green bowl", "targets": ["the white plate", "the wooden shelf"]}}\n\n'
             'Command: Set the book behind the lamp.\n'
             '{{"source": "the book", "targets": ["the lamp"]}}\n\n'
             "Command: {t}\n"
@@ -1146,8 +1149,6 @@ class InstructionCrossAttention(nn.Module):
 
 
 RELATION_CLASSES = [
-    # "inside", "next_to", "on_top_of", "under", "aligned_with",
-    # "facing", "between", "left_of", "right_of", "in_front_of", "behind",
     "ontop", "left", "right", "front", "back"
 ]
 N_RELATION_CLASSES = len(RELATION_CLASSES)
@@ -1430,6 +1431,7 @@ def _surface_height_field(
     xz_radius: float,
     k_surface: int,
     surface_band: float = 0.02,
+    down: torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
     B, P, _ = obj_pts.shape
     M = scene_pts.shape[1]
@@ -1437,18 +1439,30 @@ def _surface_height_field(
     big = torch.finfo(dtype).max / 4
 
     real = scene_pts.abs().sum(-1) > 1e-6
-    dx = obj_pts[:, :, None, 0] - scene_pts[:, None, :, 0]
-    dz = obj_pts[:, :, None, 2] - scene_pts[:, None, :, 2]
-    xz2 = dx * dx + dz * dz
-    within = (xz2 <= xz_radius * xz_radius) & real[:, None, :]
 
-    scene_y = scene_pts[:, None, :, 1].expand(B, P, M)
-    masked_y = torch.where(within, scene_y, torch.full_like(scene_y, big))
+    if down is None:
+        dx = obj_pts[:, :, None, 0] - scene_pts[:, None, :, 0]
+        dz = obj_pts[:, :, None, 2] - scene_pts[:, None, :, 2]
+        perp2 = dx * dx + dz * dz
+        scene_h = scene_pts[:, None, :, 1].expand(B, P, M)
+    else:
+        down = F.normalize(down, dim=-1)                            
+        obj_h   = torch.einsum("bpj,bj->bp", obj_pts, down)          
+        scene_hm = torch.einsum("bmj,bj->bm", scene_pts, down)        
+        diff = obj_pts[:, :, None, :] - scene_pts[:, None, :, :]    
+        d2 = (diff * diff).sum(-1)                                    
+        along = obj_h[:, :, None] - scene_hm[:, None, :]             
+        perp2 = (d2 - along * along).clamp(min=0.0)
+        scene_h = scene_hm[:, None, :].expand(B, P, M)
+
+    within = (perp2 <= xz_radius * xz_radius) & real[:, None, :]
+
+    masked_y = torch.where(within, scene_h, torch.full_like(scene_h, big))
     kref = min(2, M)
     y_ref = masked_y.topk(kref, dim=-1, largest=False).values[..., -1:]
-    top_mask = within & (scene_y >= y_ref - surface_band) & (scene_y <= y_ref + surface_band)
+    top_mask = within & (scene_h >= y_ref - surface_band) & (scene_h <= y_ref + surface_band)
     cnt = top_mask.sum(-1)
-    surf = torch.where(top_mask, scene_y, torch.zeros_like(scene_y)).sum(-1) / cnt.clamp(min=1)
+    surf = torch.where(top_mask, scene_h, torch.zeros_like(scene_h)).sum(-1) / cnt.clamp(min=1)
     return surf, within
 
 
@@ -1458,14 +1472,24 @@ def snap_to_support_surface(
     xz_radius:   float = 0.04,
     min_support: int   = 3,
     k_surface:   int   = 8,
-    max_snap:    float = 0.35,
+    max_snap:    float = 5.35,
     bottom_band: float = 0.02,
+    down:        torch.Tensor | None = None,
 ) -> tuple[torch.Tensor, torch.Tensor]:
-    surf, within = _surface_height_field(obj_pts, scene_pts, xz_radius, k_surface)
+    B = obj_pts.shape[0]
+    if down is None:
+        down_vec = torch.zeros(B, 3, device=obj_pts.device, dtype=obj_pts.dtype)
+        down_vec[:, 1] = 1.0
+    else:
+        down_vec = F.normalize(down, dim=-1)
+
+    surf, within = _surface_height_field(
+        obj_pts, scene_pts, xz_radius, k_surface, down=down_vec
+    )
     n_sup = within.sum(-1)
     supported = n_sup >= min_support
 
-    obj_y = obj_pts[:, :, 1]
+    obj_y = torch.einsum("bpj,bj->bp", obj_pts, down_vec)     
     y_bottom = obj_y.max(dim=1, keepdim=True).values
     is_bottom = obj_y >= y_bottom - bottom_band
     drive = supported & is_bottom
@@ -1473,14 +1497,50 @@ def snap_to_support_surface(
 
     big = torch.finfo(obj_pts.dtype).max / 4
     gap = torch.where(drive, surf - obj_y,
-                      torch.full_like(surf, big))                 # (B, P) = surface_y − p_y
+                      torch.full_like(surf, big))                
     delta_y = gap.min(dim=1).values
     delta_y = torch.where(drive.any(dim=1), delta_y, torch.zeros_like(delta_y))
     delta_y = torch.where(delta_y.abs() <= max_snap, delta_y, torch.zeros_like(delta_y))
 
-    snapped = obj_pts.clone()
-    snapped[:, :, 1] = snapped[:, :, 1] + delta_y[:, None]
+    snapped = obj_pts + delta_y[:, None, None] * down_vec[:, None, :]
     return snapped, delta_y
+
+
+def ontop_snap_direction(
+    o_anchor_obb:   torch.Tensor,   
+    anchor_valid:   torch.Tensor, 
+    relation_class: torch.Tensor,   
+    max_tilt_deg:   float = 30.0,
+) -> tuple[torch.Tensor, torch.Tensor]:
+    B = o_anchor_obb.shape[0]
+    dev, dt = o_anchor_obb.device, o_anchor_obb.dtype
+    down = torch.zeros(B, 3, device=dev, dtype=dt)
+    down[:, 1] = 1.0                                             
+
+    sel_slot = torch.full((B,), -1, dtype=torch.long, device=dev)
+
+    ontop_idx = RELATION_CLASSES.index("ontop")
+    cos_thr = math.cos(math.radians(max_tilt_deg))
+
+    for b in range(B):
+        is_ontop = anchor_valid[b] & (relation_class[b] == ontop_idx)
+        slots = torch.nonzero(is_ontop, as_tuple=False).flatten()
+        if slots.numel() == 0:
+            continue
+        slot = int(slots[0].item())
+        sel_slot[b] = slot
+        R = o_anchor_obb[b, slot, 3:12].reshape(3, 3)
+        n = R[:, 1]                                               
+        norm = torch.linalg.norm(n)
+        if not torch.isfinite(n).all() or norm < 1e-6:
+            continue
+        n = n / norm
+        if n[1] < 0:                                             
+            n = -n
+        if n[1] < cos_thr:                                       
+            continue
+        down[b] = n
+    return down, sel_slot
 
 
 def loss_surface_penetration(
@@ -1520,7 +1580,7 @@ def loss_vertical_support(
     bot_idx = bot_idx_full.gather(1, perm)
     bot_pts = transformed_o_ref.gather(
         1, bot_idx.unsqueeze(-1).expand(-1, -1, 3)
-    )  # (B, n_s, 3)
+    )  
 
     diff     = scene_points[:, None, :, :] - bot_pts[:, :, None, :]
     horiz_d2 = diff[..., 0].pow(2) + diff[..., 2].pow(2)
@@ -1719,7 +1779,7 @@ def loss_relation_geometric(
 
     obj_local = torch.einsum(
         "bpj,bjk->bpk", obj_pts - center.unsqueeze(1), R
-    )                                               # (B, {P|8}, 3)
+    )                                               
     ref_min = obj_local.min(dim=1).values
     ref_max = obj_local.max(dim=1).values
     anchor_min = -half
@@ -1805,7 +1865,7 @@ class PlacementLoss(nn.Module):
         per_slot = F.smooth_l1_loss(
             pred_pos.unsqueeze(1).expand_as(gt_final_pos),
             gt_final_pos, reduction="none", beta=self.beta,
-        ).sum(-1)                                                      # (B, MAX_ANCHORS)
+        ).sum(-1)                                                      
         valid_f = gt_anchor_valid.float()
         n_valid = valid_f.sum(dim=1).clamp(min=1)
         losses["trans"] = ((per_slot * valid_f).sum(dim=1) / n_valid).mean()
@@ -2542,6 +2602,9 @@ class SceneTransformModel(nn.Module):
         o_anchor_obb       = torch.zeros(B, MAX_ANCHORS, 15, device=dev)
         o_anchor_obb[..., 3:12] = torch.eye(3, device=dev).reshape(9)
         anchor_grounded    = torch.zeros(B, MAX_ANCHORS, dtype=torch.bool, device=dev)
+        anchor_points_all: list[list[torch.Tensor | None]] = [
+            [None] * MAX_ANCHORS for _ in range(B)
+        ]
 
         scene_points_all: list[torch.Tensor] = []
 
@@ -2568,6 +2631,7 @@ class SceneTransformModel(nn.Module):
                     o_anchor_bboxes[b, slot, 3:] = anchor_pts.max(dim=0)[0]
                     c_obb, R_obb, h_obb = anchor_obb(anchor_pts, extents_over_all=True)
                     o_anchor_obb[b, slot] = torch.cat([c_obb, R_obb.reshape(9), h_obb])
+                    anchor_points_all[b][slot] = anchor_pts.detach()
                 elif idx >= 0:
                     if idx < len(scene_centroids_list[b]):
                         o_anchor_centroids[b, slot] = scene_centroids_list[b][idx]
@@ -2580,6 +2644,7 @@ class SceneTransformModel(nn.Module):
                             o_anchor_obb[b, slot] = torch.cat(
                                 [c_obb, R_obb.reshape(9), h_obb]
                             )
+                            anchor_points_all[b][slot] = pts.detach().view(-1, 3)
 
             if scene_points_list[b].shape[0] > 0:
                 scene_points_all.append(scene_points_list[b].view(-1, 3))
@@ -2610,8 +2675,20 @@ class SceneTransformModel(nn.Module):
                 o_anchor_bboxes[b]    = o_anchor_bboxes[b][perm]
                 o_anchor_obb[b]       = o_anchor_obb[b][perm]
                 anchor_grounded[b]    = anchor_grounded[b][perm]
+                perm_list = perm.tolist()
+                anchor_points_all[b]  = [anchor_points_all[b][p] for p in perm_list]
 
-        anchor_valid = gt_anchor_valid if gt_anchor_valid is not None else anchor_grounded
+        if gt_anchor_valid is not None:
+            anchor_valid = gt_anchor_valid
+        else:
+            target_present = torch.zeros(B, MAX_ANCHORS, dtype=torch.bool, device=dev)
+            for b in range(B):
+                qd = qwen_dicts[b] if qwen_dicts and b < len(qwen_dicts) else {}
+                tgts = qd.get("targets", []) if isinstance(qd, dict) else []
+                for slot in range(min(len(tgts), MAX_ANCHORS)):
+                    if tgts[slot]: 
+                        target_present[b, slot] = True
+            anchor_valid = anchor_grounded & target_present
 
         relation_embs = torch.zeros(B, MAX_ANCHORS, D, device=dev)
         for slot in range(MAX_ANCHORS):
@@ -2661,12 +2738,35 @@ class SceneTransformModel(nn.Module):
 
         if snap_to_surface and not self.training:
             with torch.no_grad():
+                effective_rel = (
+                    gt_relation_class
+                    if gt_relation_class is not None
+                    else per_slot_logits.argmax(dim=-1)
+                )
+                snap_down, snap_slot = ontop_snap_direction(
+                    o_anchor_obb, anchor_valid, effective_rel
+                )
+                support_clouds: list[torch.Tensor] = []
+                for b in range(B):
+                    slot = int(snap_slot[b].item())
+                    pts = anchor_points_all[b][slot] if slot >= 0 else None
+                    if pts is not None and pts.shape[0] > 0:
+                        support_clouds.append(pts.to(dev))
+                    else:
+                        sp = scene_points_pad[b]
+                        support_clouds.append(sp[sp.abs().sum(-1) > 1e-6])
+                max_sup = max(c.shape[0] for c in support_clouds)
+                snap_support = torch.zeros(B, max_sup, 3, device=dev)
+                for b, c in enumerate(support_clouds):
+                    snap_support[b, :c.shape[0]] = c
                 transformed_o_ref_snapped, snap_delta_y = snap_to_support_surface(
-                    transformed_o_ref.detach(), scene_points_pad,
+                    transformed_o_ref.detach(), snap_support, down=snap_down,
                 )
         else:
             transformed_o_ref_snapped = transformed_o_ref.detach()
             snap_delta_y = torch.zeros(B, device=dev)
+            snap_down = torch.zeros(B, 3, device=dev)
+            snap_down[:, 1] = 1.0
 
         return {
             "seg": seg,
@@ -2695,6 +2795,7 @@ class SceneTransformModel(nn.Module):
             "transformed_o_ref": transformed_o_ref,
             "transformed_o_ref_snapped": transformed_o_ref_snapped,
             "snap_delta_y": snap_delta_y,
+            "snap_down": snap_down,
             "scene_points": scene_points_pad,
             "o_anchor_centroid":  o_anchor_centroid,
             "o_anchor_centroids": o_anchor_centroids,

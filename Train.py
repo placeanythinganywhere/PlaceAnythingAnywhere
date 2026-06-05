@@ -5,8 +5,8 @@ import torch
 import torch.nn as nn
 import torch.optim as optim
 
-from Dataloader import build_iter_dataloader
-from Model import SceneTransformModel, PlacementLoss
+from data_loader import build_iter_dataloader
+from model import SceneTransformModel, PlacementLoss
 
 
 _original_torch_load = torch.load
@@ -21,17 +21,16 @@ def main():
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"Using device: {device}")
 
-    # 1. Dataset & DataLoader
     data_root = Path("dataset/flattened_dataset")
     if not data_root.exists():
         print(f"Data root {data_root} does not exist.")
         return
 
-    augment_data = False # Disable augmentations when using cached features!
+    augment_data = False 
     
     loader = build_iter_dataloader(
         root=data_root,
-        batch_size=12,
+        batch_size=8,
         num_workers=0,
         shuffle=True,
         augment=augment_data,
@@ -39,8 +38,6 @@ def main():
     )
     print(f"Found {len(loader)} batches in dataloader.")
 
-    # 2. Model configuration
-    # Check for SAM2 checkpoint
     ckpt_dir = Path("checkpoints")
     sam2_ckpt = None
     if ckpt_dir.exists():
@@ -82,15 +79,12 @@ def main():
 
     model.train()
 
-    # 3. Optimizer
-    # Exclude frozen parameters
     trainable_params = [p for p in model.parameters() if p.requires_grad]
     optimizer = optim.AdamW(trainable_params, lr=1e-4, weight_decay=1e-4)
     criterion = PlacementLoss().to(device)
 
     print(f"Starting training with {len(trainable_params)} trainable tensors...")
 
-    # 3b. Resume from latest checkpoint if available
     start_epoch = 0
     resume_path = ckpt_dir / "latest.pt"
     if resume_path.exists():
@@ -101,7 +95,6 @@ def main():
         start_epoch = checkpoint.get('epoch', 0)
         print(f"  → Resumed at epoch {start_epoch}")
 
-    # 4. Training loop
     epochs = 100
     for epoch in range(start_epoch, epochs):
         for step, batch in enumerate(loader):
@@ -112,15 +105,14 @@ def main():
 
             optimizer.zero_grad()
 
-            # Forward pass
             camera_intrinsics = batch.get("camera_intrinsics")
             if camera_intrinsics is not None:
                 camera_intrinsics = camera_intrinsics.to(device)
 
-            gt_anchor_pos     = batch["gt_anchor_pos"].to(device)     # (B, 5, 3)
-            gt_delta_trans    = batch["gt_delta_trans"].to(device)     # (B, 5, 3)
-            gt_relation_class = batch["gt_relation_class"].to(device)  # (B, 5)
-            gt_anchor_valid   = batch["gt_anchor_valid"].to(device)    # (B, 5) bool
+            gt_anchor_pos     = batch["gt_anchor_pos"].to(device)     
+            gt_delta_trans    = batch["gt_delta_trans"].to(device)    
+            gt_relation_class = batch["gt_relation_class"].to(device) 
+            gt_anchor_valid   = batch["gt_anchor_valid"].to(device)   
 
             out = model(
                 scene_rgbd,
@@ -133,10 +125,7 @@ def main():
                 gt_anchor_pos=gt_anchor_pos,
             )
 
-            # Samples where Qwen failed to extract source+targets have no usable
-            # grounding signal — zero them out of every anchor slot so they
-            # contribute 0 to trans/relation/geometric losses.
-            qwen_valid = out["qwen_valid"].to(gt_anchor_valid.device)  # (B,)
+            qwen_valid = out["qwen_valid"].to(gt_anchor_valid.device)
             gt_anchor_valid = gt_anchor_valid & qwen_valid.unsqueeze(1)
 
             loss_dict = criterion(
@@ -156,17 +145,13 @@ def main():
 
             loss = loss_dict["total"]
 
-            # Backward pass
             loss.backward()
             torch.nn.utils.clip_grad_norm_(model.parameters(), max_norm=1.0)
             optimizer.step()
 
-            # Log loss breakdown
             parts = ' | '.join(f"{k}={v.item():.4f}" for k, v in loss_dict.items() if k != 'total')
-            # print(f"Epoch {epoch+1}/{epochs} | Step {step} | Samples: {list(sample_id)} | Loss: {loss.item():.4f} | {parts}")
             print(f"Epoch {epoch+1}/{epochs} | Step {step} | Loss: {loss.item():.4f} | {parts}")
 
-        # Save checkpoint at end of each epoch
         ckpt_dir.mkdir(exist_ok=True)
         save_path = ckpt_dir / f"latest.pt"
         torch.save({
@@ -175,7 +160,6 @@ def main():
             'optimizer_state_dict': optimizer.state_dict(),
         }, save_path)
         print(f"  → Checkpoint saved: {save_path}")
-    # 5. Save final weights
     ckpt_dir.mkdir(exist_ok=True)
     save_path = ckpt_dir / "latest.pt"
     print(f"Saving final model weights to {save_path}...")
@@ -188,3 +172,4 @@ def main():
 
 if __name__ == "__main__":
     main()
+    
