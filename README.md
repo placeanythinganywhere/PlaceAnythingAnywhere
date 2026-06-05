@@ -1,6 +1,6 @@
 # Place-Anything-Anywhere: A Lightweight Robot Agnostic Goal Generator
 
-[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/github/YOUR_USERNAME/YOUR_REPO/blob/main/notebook.ipynb)
+[![Open In Colab](https://colab.research.google.com/assets/colab-badge.svg)](https://colab.research.google.com/drive/1000t586Wy45Fbm8ndL5rsZRFNNdYvjY5?usp=sharing)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
 
 While natural language has emerged as a powerful interface for robotic manipulation, translating open-vocabulary instructions into precise physical actions remains a persistent challenge. Recent trends heavily favor end-to-end Vision-Language-Action (VLA) systems that directly map visual and textual inputs to continuous robot trajectories. However, these architectures inherently entangle high-level semantic reasoning with low-level kinematic control, incur substantial computational overhead, and cannot be easily transferred to another robot platform without extensive fine-tuning.
