@@ -9,29 +9,23 @@ In this work, we argue that for fundamental rigid-body manipulation—such as ev
 
 This repository contains the official implementation of **Place-Anything-Anywhere (PAA)**, a lightweight framework designed specifically for language-conditioned object placement through anchor-relative pose estimation. Our system takes a source object RGB-D, a target RGB-D scene, and a natural language instruction, and outputs a precise spatial destination in the camera frame. By focusing strictly on multimodal geometric reasoning and goal generation, PAA provides a scalable, robot-agnostic interface that operates efficiently without massive parameter counts.
 
-## 🚀 Features & Contributions
-* **Lightweight End-to-End Goal Generation:** PAA aligns open-vocabulary instructions and scene structure to account for semantic and spatial relations while avoiding collisions, bypassing the heavy computational constraints of VLA models.
-* **Anchor-Relative Continuous SE(3) Prediction:** Instead of generating pixel-level futures or absolute global coordinates, the model predicts a continuous, anchor-relative spatial transformation. This guarantees precise, collision-aware placements directly from partial camera observations.
-* **Multi-Modal Scene and Object Encoding:** Treats object grounding and segmentation as modular front-end components. It uses a frozen DINOv2 backbone for visual semantics, PointNet++ for local geometry, and Grounding DINO/SAM2 for explicit object isolation.
-* **Relational Q-Former Bottleneck:** Employs a two-stage cross-attention Q-Former that factorizes language into grounded sequence features, continuous relation conditioning, and discrete spatial embeddings, distilling multi-modal context into a compact 256-D action latent.
-* **OmniGibson Synthetic Data Pipeline:** Features an automated, physics-aware synthetic generation pipeline built on the BEHAVIOR-1K assets and OmniGibson framework, allowing users to rapidly generate high-fidelity (Object, Scene, Future) training triplets.
-* **Accessible & Ready to Use:** We release the complete code along with a Google Colab notebook for quick zero-shot testing with sample datasets and support for user-uploaded data.
----
 
 ## 📂 Repository Structure
 
+* `assets/`: Contains camera poses and object list for dataset generation.
+* `Testing_Samples/`: Contains sample test data for inference.
+* `Dataloader.py`: Custom PyTorch Dataset and DataLoader designed to parse the RGB-D tensors, instruction text, and ground truth $SE(3)$ transformations.
 * `Dataset_generator.py`: **Dataset Creation Pipeline.** Uses the OmniGibson simulator to generate high-fidelity (Initial Object, Initial Scene, Final Scene) triplets. It spawns objects, enforces spatial relations, teleports cameras, and extracts perfectly aligned RGB-D images and Point Clouds.
 * `Model.py`: The core PyTorch architecture, including the multi-modal tokenizer, PointNet++ spatial encoder, and the cross-attention placement head.
-* `Dataloader.py`: Custom PyTorch Dataset and DataLoader designed to parse the RGB-D tensors, instruction text, and ground truth $SE(3)$ transformations.
-<!-- * `inference.py`: End-to-end evaluation script. Loads trained weights, runs the forward pass, decodes the 6D rotation back into a valid mathematical matrix, and animates the predicted placement using Open3D. -->
-<!-- * `paper_classes.json` / `rs_int_cam_poses.json`: Config files containing OmniGibson scene settings, valid camera sweeps, and semantic object categorization. -->
+* `Process_dataset.py`: dataset pre-process script to pre compute some features.
+* `Train.py`: to begin local training with a generated dataset folder.
 
 ---
 
 ## 🛠️ Installation
 
 ### Prerequisites
-We highly recommend using an isolated Conda environment. Note that generating the dataset using `Dataset_generator.py` requires a system capable of running NVIDIA's **OmniGibson / Isaac Sim**. Model training and inference can be run on standard PyTorch-compatible GPUs.
+We highly recommend using an isolated Conda environment. Note that generating the dataset using `Dataset_generator.py` requires a system capable of running **OmniGibson**. Model training and inference can be run on standard PyTorch-compatible GPUs.
 
 ### 1. Create a Conda Environment
 ```bash
@@ -40,10 +34,9 @@ conda activate place-anything
 ```
 
 ### 2. Install PyTorch
-Install PyTorch compatible with your CUDA version (e.g., CUDA 11.8 or 12.1):
+Install PyTorch compatible with your CUDA version:
 
 ```bash
-# Example for CUDA 11.8
 conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvidia
 ```
 
@@ -52,11 +45,11 @@ Install the required packages for model training and inference:
 
 ```bash
 pip install numpy scipy opencv-python pillow matplotlib transformers trimesh open3d sam2
-(Note: transformers is required for CLIP and T5 text encoders. open3d and matplotlib are used in inference.py for visualization).
+(Note: transformers is required for CLIP and T5 text encoders. open3d and matplotlib are used for inference for visualization).
 ```
 
 ### 4. Install OmniGibson (For Dataset Generation ONLY)
-If you plan to generate your own dataset using Dataset_generator.py, you must install OmniGibson. Follow the Official OmniGibson Installation Guide.
+If you plan to generate your own dataset using Dataset_generator.py, you must install OmniGibson. Follow the [Official OmniGibson Installation Guide](https://behavior.stanford.edu/getting_started/installation.html).
 
 ## 💻 Usage
 ### 1. Try it in Google Colab
@@ -65,13 +58,13 @@ The fastest way to test inference and visualize the model's capabilities without
 👉 Open the Colab Notebook
 
 ### 2. Generating the Dataset (Local)
-To generate the physics-grounded synthetic dataset using Isaac Sim / OmniGibson:
+To generate the physics-grounded synthetic dataset using OmniGibson:
 
 
 ```Bash
 python Dataset_generator.py
 ```
-This script iterates through the scenes defined in rs_int_cam_poses.json and the objects in paper_classes.json. It will save the RGB, Depth, extracted point clouds, and metadata.json files to your designated data directory.
+This script iterates through the scenes defined in rs_int_cam_poses.json and the objects in object_list.json. It will save the RGB, Depth, extracted point clouds, and metadata.json files to your designated data directory.
 
 ```Bash
 python Process_dataset.py
@@ -80,25 +73,12 @@ This script pre-processes the dataset and precomputes certain values and structu
 
 ### 3. Training the Model
 (Assuming you have generated the data or downloaded our pre-computed dataset)
-Update the DATA_ROOT or DATASET_PATH in data_loader.py/train.py and run your standard PyTorch training loop:
+Update the dataset path in Dataloader.py/Train.py and run your standard PyTorch training loop:
 
 ```Bash
-python train.py
+python Train.py
 ```
-Make sure dataset paths are correct inside the train.py.
 
-
-<!-- ### 4. Running Inference & Visualization
-To test a trained checkpoint on a validation sample and visualize the predicted 3D placement against the ground truth:
-
-```bash
-python inference.py --checkpoint checkpoints/entity_world_model_ep10.pth --data_dir final_dataset --sample_idx 0
-```
-This will open an interactive Open3D window where:
-
-Colored Points: The base scene geometry.
-Green Box/Sphere: Ground Truth target placement.
-Red Object / Blue Points: The model's predicted 3D placement based on the language prompt. -->
 
 ## 📜 License
 This project is licensed under the MIT License - see the LICENSE file for details.

@@ -374,7 +374,7 @@ SCRIPT_DIR = os.path.dirname(os.path.abspath(__file__))
 DATASET_PATH = os.path.join(SCRIPT_DIR, "dataset")
 os.makedirs(DATASET_PATH, exist_ok=True)
 
-with open("assets/paper_classes.json", "r") as f:
+with open("assets/object_list.json", "r") as f:
     class_config = json.load(f)
 MOVABLE_CATEGORIES = class_config["Object"]
 random.shuffle(MOVABLE_CATEGORIES)
