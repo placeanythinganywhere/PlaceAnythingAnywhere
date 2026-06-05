@@ -20,18 +20,18 @@ This repository contains the official implementation of **Place-Anything-Anywher
 
 ## 📂 Repository Structure
 
-* `test20.py`: **Dataset Creation Pipeline.** Uses the OmniGibson simulator to generate high-fidelity (Initial Object, Initial Scene, Final Scene) triplets. It spawns objects, enforces spatial relations, teleports cameras, and extracts perfectly aligned RGB-D images and Point Clouds.
-* `model.py`: The core PyTorch architecture, including the multi-modal tokenizer, PointNet++ spatial encoder, and the cross-attention placement head.
-* `data_loader.py`: Custom PyTorch Dataset and DataLoader designed to parse the RGB-D tensors, instruction text, and ground truth $SE(3)$ transformations.
-* `inference.py`: End-to-end evaluation script. Loads trained weights, runs the forward pass, decodes the 6D rotation back into a valid mathematical matrix, and animates the predicted placement using Open3D.
-* `paper_classes.json` / `rs_int_cam_poses.json`: Config files containing OmniGibson scene settings, valid camera sweeps, and semantic object categorization.
+* `Dataset_generator.py`: **Dataset Creation Pipeline.** Uses the OmniGibson simulator to generate high-fidelity (Initial Object, Initial Scene, Final Scene) triplets. It spawns objects, enforces spatial relations, teleports cameras, and extracts perfectly aligned RGB-D images and Point Clouds.
+* `Model.py`: The core PyTorch architecture, including the multi-modal tokenizer, PointNet++ spatial encoder, and the cross-attention placement head.
+* `Dataloader.py`: Custom PyTorch Dataset and DataLoader designed to parse the RGB-D tensors, instruction text, and ground truth $SE(3)$ transformations.
+<!-- * `inference.py`: End-to-end evaluation script. Loads trained weights, runs the forward pass, decodes the 6D rotation back into a valid mathematical matrix, and animates the predicted placement using Open3D. -->
+<!-- * `paper_classes.json` / `rs_int_cam_poses.json`: Config files containing OmniGibson scene settings, valid camera sweeps, and semantic object categorization. -->
 
 ---
 
 ## 🛠️ Installation
 
 ### Prerequisites
-We highly recommend using an isolated Conda environment. Note that generating the dataset using `test20.py` requires a system capable of running NVIDIA's **OmniGibson / Isaac Sim**. Model training and inference can be run on standard PyTorch-compatible GPUs.
+We highly recommend using an isolated Conda environment. Note that generating the dataset using `Dataset_generator.py` requires a system capable of running NVIDIA's **OmniGibson / Isaac Sim**. Model training and inference can be run on standard PyTorch-compatible GPUs.
 
 ### 1. Create a Conda Environment
 ```bash
@@ -51,12 +51,12 @@ conda install pytorch torchvision torchaudio pytorch-cuda=11.8 -c pytorch -c nvi
 Install the required packages for model training and inference:
 
 ```bash
-pip install numpy scipy opencv-python pillow matplotlib transformers trimesh open3d
+pip install numpy scipy opencv-python pillow matplotlib transformers trimesh open3d sam2
 (Note: transformers is required for CLIP and T5 text encoders. open3d and matplotlib are used in inference.py for visualization).
 ```
 
 ### 4. Install OmniGibson (For Dataset Generation ONLY)
-If you plan to generate your own dataset using test20.py, you must install OmniGibson. Follow the Official OmniGibson Installation Guide.
+If you plan to generate your own dataset using Dataset_generator.py, you must install OmniGibson. Follow the Official OmniGibson Installation Guide.
 
 ## 💻 Usage
 ### 1. Try it in Google Colab
@@ -69,9 +69,14 @@ To generate the physics-grounded synthetic dataset using Isaac Sim / OmniGibson:
 
 
 ```Bash
-python test20.py
+python Dataset_generator.py
 ```
 This script iterates through the scenes defined in rs_int_cam_poses.json and the objects in paper_classes.json. It will save the RGB, Depth, extracted point clouds, and metadata.json files to your designated data directory.
+
+```Bash
+python Process_dataset.py
+```
+This script pre-processes the dataset and precomputes certain values and structures the dataset before training. 
 
 ### 3. Training the Model
 (Assuming you have generated the data or downloaded our pre-computed dataset)
@@ -80,8 +85,10 @@ Update the DATA_ROOT or DATASET_PATH in data_loader.py/train.py and run your sta
 ```Bash
 python train.py
 ```
+Make sure dataset paths are correct inside the train.py.
 
-### 4. Running Inference & Visualization
+
+<!-- ### 4. Running Inference & Visualization
 To test a trained checkpoint on a validation sample and visualize the predicted 3D placement against the ground truth:
 
 ```bash
@@ -91,7 +98,7 @@ This will open an interactive Open3D window where:
 
 Colored Points: The base scene geometry.
 Green Box/Sphere: Ground Truth target placement.
-Red Object / Blue Points: The model's predicted 3D placement based on the language prompt.
+Red Object / Blue Points: The model's predicted 3D placement based on the language prompt. -->
 
 ## 📜 License
 This project is licensed under the MIT License - see the LICENSE file for details.
